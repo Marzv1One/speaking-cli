@@ -1,0 +1,9 @@
+# Go
+speaking.exe
+speaking
+
+# Audio
+*.wav
+
+# Env
+.env
