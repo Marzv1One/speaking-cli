@@ -10,6 +10,8 @@ import (
 	"charm.land/fantasy/providers/openrouter"
 )
 
+const maxRecordRetries = 3
+
 func main() {
 	provider, err := openrouter.New(openrouter.WithAPIKey(os.Getenv("OPENROUTER_API_KEY")))
 	if err != nil {
@@ -43,30 +45,55 @@ func main() {
 	conv := NewConversation()
 
 	fmt.Println("=== English Practice Session ===")
-	fmt.Println("Commands: /style = switch persona, /quit = exit\n")
+	fmt.Println("Commands: /style = switch persona, /quit = exit, Enter after recording to accept/re-record")
+	fmt.Println()
 
 	for {
-		rec, err := recordFromMic()
-		if err != nil {
-			fmt.Fprintln(os.Stderr, "Recording error:", err)
-			continue
+		// Record and transcribe with redo loop
+		var transcribed string
+		retries := 0
+		for {
+			rec, cancelled, err := recordFromMic()
+			if err != nil {
+				retries++
+				fmt.Fprintf(os.Stderr, "Recording error (%d/%d): %v\n", retries, maxRecordRetries, err)
+				if retries >= maxRecordRetries {
+					fmt.Fprintln(os.Stderr, "Too many recording failures, skipping turn.")
+					break
+				}
+				continue
+			}
+			if cancelled {
+				fmt.Println("Recording cancelled.")
+				continue
+			}
+			retries = 0
+
+			fmt.Print("Transcribing...")
+			result, err := transcriber.Generate(ctx, fantasy.AgentCall{
+				Prompt: "Transcribe this audio verbatim.",
+				Files: []fantasy.FilePart{
+					{MediaType: "audio/wav", Data: rec.WAVData},
+				},
+			})
+			if err != nil {
+				fmt.Fprintln(os.Stderr, "\nTranscription error:", err)
+				continue
+			}
+
+			transcribed = strings.TrimSpace(result.Response.Content.Text())
+			fmt.Printf("\rYou said: %s\n", transcribed)
+			fmt.Print("Send? (Enter = yes, r = re-record): ")
+			confirm, _ := stdin.ReadString('\n')
+			if strings.ToLower(strings.TrimSpace(confirm)) != "r" {
+				break
+			}
+			fmt.Println()
 		}
 
-		// Transcribe
-		fmt.Print("Transcribing...")
-		result, err := transcriber.Generate(ctx, fantasy.AgentCall{
-			Prompt: "Transcribe this audio verbatim.",
-			Files: []fantasy.FilePart{
-				{MediaType: "audio/wav", Data: rec.WAVData},
-			},
-		})
-		if err != nil {
-			fmt.Fprintln(os.Stderr, "\nTranscription error:", err)
+		if transcribed == "" {
 			continue
 		}
-
-		transcribed := strings.TrimSpace(result.Response.Content.Text())
-		fmt.Printf("\rYou said: %s\n", transcribed)
 
 		// Check for commands
 		if strings.HasPrefix(strings.ToLower(transcribed), "/quit") {
@@ -85,11 +112,9 @@ func main() {
 		conv.AddUser(transcribed)
 
 		// Build teacher prompt with conversation history
-		teacherPrompt := conv.FormatHistory() + "\n\nRespond as the English teacher."
-
 		fmt.Print("Thinking...")
 		teacherResult, err := teacher.Generate(ctx, fantasy.AgentCall{
-			Prompt: teacherPrompt,
+			Messages: conv.FantasyMessages(),
 		})
 		if err != nil {
 			fmt.Fprintln(os.Stderr, "\nTeacher error:", err)

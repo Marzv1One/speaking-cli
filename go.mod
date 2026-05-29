@@ -2,7 +2,10 @@ module speaking
 
 go 1.26.3
 
-require charm.land/fantasy v0.25.2
+require (
+	charm.land/fantasy v0.25.2
+	github.com/gen2brain/malgo v0.11.25
+)
 
 require (
 	cloud.google.com/go v0.123.0 // indirect
@@ -31,7 +34,6 @@ require (
 	github.com/charmbracelet/x/exp/strings v0.1.0 // indirect
 	github.com/charmbracelet/x/json v0.2.0 // indirect
 	github.com/felixge/httpsnoop v1.0.4 // indirect
-	github.com/gen2brain/malgo v0.11.25 // indirect
 	github.com/go-json-experiment/json v0.0.0-20260505212615-e40f80bf6836 // indirect
 	github.com/go-logr/logr v1.4.3 // indirect
 	github.com/go-logr/stdr v1.2.2 // indirect

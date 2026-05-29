@@ -1,22 +1,27 @@
 package main
 
 import (
+	"bufio"
 	"bytes"
 	"encoding/binary"
 	"fmt"
+	"os"
+	"strings"
 
 	"github.com/gen2brain/malgo"
 )
+
+var stdin = bufio.NewReader(os.Stdin)
 
 type Recording struct {
 	WAVData    []byte
 	SampleRate uint32
 }
 
-func recordFromMic() (*Recording, error) {
+func recordFromMic() (*Recording, bool, error) {
 	ctx, err := malgo.InitContext(nil, malgo.ContextConfig{}, nil)
 	if err != nil {
-		return nil, fmt.Errorf("init context: %w", err)
+		return nil, false, fmt.Errorf("init context: %w", err)
 	}
 	defer func() {
 		_ = ctx.Uninit()
@@ -36,18 +41,22 @@ func recordFromMic() (*Recording, error) {
 		},
 	})
 	if err != nil {
-		return nil, fmt.Errorf("init device: %w", err)
+		return nil, false, fmt.Errorf("init device: %w", err)
 	}
 
 	fmt.Print("Press Enter to start recording...")
-	fmt.Scanln()
+	stdin.ReadString('\n')
 
 	if err := device.Start(); err != nil {
-		return nil, fmt.Errorf("start device: %w", err)
+		return nil, false, fmt.Errorf("start device: %w", err)
 	}
 
-	fmt.Println("Recording... Press Enter to stop.")
-	fmt.Scanln()
+	fmt.Println("Recording... Press Enter to stop, c+Enter to cancel.")
+	stop, _ := stdin.ReadString('\n')
+	if strings.TrimSpace(strings.ToLower(stop)) == "c" {
+		device.Uninit()
+		return nil, true, nil
+	}
 
 	device.Uninit()
 
@@ -56,7 +65,7 @@ func recordFromMic() (*Recording, error) {
 	return &Recording{
 		WAVData:    wav,
 		SampleRate: deviceConfig.SampleRate,
-	}, nil
+	}, false, nil
 }
 
 func encodeWAV(pcm []byte, sampleRate uint32, channels uint16, bitsPerSample uint16) []byte {
