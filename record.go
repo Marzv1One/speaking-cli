@@ -1,71 +1,114 @@
 package main
 
 import (
-	"bufio"
 	"bytes"
 	"encoding/binary"
 	"fmt"
-	"os"
-	"strings"
+	"sync"
 
 	"github.com/gen2brain/malgo"
 )
-
-var stdin = bufio.NewReader(os.Stdin)
 
 type Recording struct {
 	WAVData    []byte
 	SampleRate uint32
 }
 
-func recordFromMic() (*Recording, bool, error) {
+var (
+	mu          sync.Mutex
+	malgoCtx    *malgo.AllocatedContext
+	captureDev  *malgo.Device
+	capturedPCM []byte
+)
+
+// startMicCapture begins recording from the microphone in the background.
+// Call stopMicCapture to stop and retrieve the WAV data.
+func startMicCapture() error {
+	mu.Lock()
+	defer mu.Unlock()
+
 	ctx, err := malgo.InitContext(nil, malgo.ContextConfig{}, nil)
 	if err != nil {
-		return nil, false, fmt.Errorf("init context: %w", err)
+		return fmt.Errorf("init context: %w", err)
 	}
-	defer func() {
-		_ = ctx.Uninit()
-		ctx.Free()
-	}()
+	malgoCtx = ctx
 
 	deviceConfig := malgo.DefaultDeviceConfig(malgo.Capture)
 	deviceConfig.Capture.Format = malgo.FormatS16
 	deviceConfig.Capture.Channels = 1
 	deviceConfig.SampleRate = 16000
 
-	var captured []byte
+	capturedPCM = nil
 
 	device, err := malgo.InitDevice(ctx.Context, deviceConfig, malgo.DeviceCallbacks{
 		Data: func(output, input []byte, framecount uint32) {
-			captured = append(captured, input...)
+			mu.Lock()
+			capturedPCM = append(capturedPCM, input...)
+			mu.Unlock()
 		},
 	})
 	if err != nil {
-		return nil, false, fmt.Errorf("init device: %w", err)
+		ctx.Uninit()
+		ctx.Free()
+		return fmt.Errorf("init device: %w", err)
 	}
 
-	fmt.Print("Press Enter to start recording...")
-	stdin.ReadString('\n')
+	captureDev = device
 
 	if err := device.Start(); err != nil {
-		return nil, false, fmt.Errorf("start device: %w", err)
-	}
-
-	fmt.Println("Recording... Press Enter to stop, c+Enter to cancel.")
-	stop, _ := stdin.ReadString('\n')
-	if strings.TrimSpace(strings.ToLower(stop)) == "c" {
 		device.Uninit()
-		return nil, true, nil
+		ctx.Uninit()
+		ctx.Free()
+		return fmt.Errorf("start device: %w", err)
 	}
 
-	device.Uninit()
+	return nil
+}
 
-	wav := encodeWAV(captured, deviceConfig.SampleRate, 1, 16)
+// stopMicCapture stops recording and returns the captured audio as a WAV.
+func stopMicCapture() (*Recording, error) {
+	mu.Lock()
+	defer mu.Unlock()
 
-	return &Recording{
+	if captureDev == nil {
+		return nil, fmt.Errorf("not recording")
+	}
+
+	captureDev.Uninit()
+	captureDev = nil
+
+	if malgoCtx != nil {
+		malgoCtx.Uninit()
+		malgoCtx.Free()
+		malgoCtx = nil
+	}
+
+	wav := encodeWAV(capturedPCM, 16000, 1, 16)
+
+	rec := &Recording{
 		WAVData:    wav,
-		SampleRate: deviceConfig.SampleRate,
-	}, false, nil
+		SampleRate: 16000,
+	}
+
+	capturedPCM = nil
+	return rec, nil
+}
+
+// cancelMicCapture stops recording without returning audio data.
+func cancelMicCapture() {
+	mu.Lock()
+	defer mu.Unlock()
+
+	if captureDev != nil {
+		captureDev.Uninit()
+		captureDev = nil
+	}
+	if malgoCtx != nil {
+		malgoCtx.Uninit()
+		malgoCtx.Free()
+		malgoCtx = nil
+	}
+	capturedPCM = nil
 }
 
 func encodeWAV(pcm []byte, sampleRate uint32, channels uint16, bitsPerSample uint16) []byte {

@@ -8,14 +8,38 @@ import (
 
 	"charm.land/fantasy"
 	"charm.land/fantasy/providers/openrouter"
+	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 )
 
-const maxRecordRetries = 3
+var (
+	bannerStyle = lipgloss.NewStyle().
+			Bold(true).
+			Foreground(lipgloss.Color("170")).
+			MarginBottom(1)
+
+	youStyle = lipgloss.NewStyle().
+			Foreground(lipgloss.Color("114")).
+			Bold(true)
+
+	teacherStyle = lipgloss.NewStyle().
+			Foreground(lipgloss.Color("212")).
+			Bold(true)
+
+	teacherBodyStyle = lipgloss.NewStyle().
+				PaddingLeft(2)
+
+	errStyle = lipgloss.NewStyle().
+			Foreground(lipgloss.Color("196"))
+
+	infoStyle = lipgloss.NewStyle().
+			Foreground(lipgloss.Color("245"))
+)
 
 func main() {
 	provider, err := openrouter.New(openrouter.WithAPIKey(os.Getenv("OPENROUTER_API_KEY")))
 	if err != nil {
-		fmt.Fprintln(os.Stderr, "Provider error:", err)
+		fmt.Fprintln(os.Stderr, errStyle.Render("Provider error: "+err.Error()))
 		os.Exit(1)
 	}
 
@@ -23,13 +47,13 @@ func main() {
 
 	transcriptionModel, err := provider.LanguageModel(ctx, "xiaomi/mimo-v2.5")
 	if err != nil {
-		fmt.Fprintln(os.Stderr, "Transcription model error:", err)
+		fmt.Fprintln(os.Stderr, errStyle.Render("Transcription model error: "+err.Error()))
 		os.Exit(1)
 	}
 
 	teacherModel, err := provider.LanguageModel(ctx, "xiaomi/mimo-v2-flash")
 	if err != nil {
-		fmt.Fprintln(os.Stderr, "Teacher model error:", err)
+		fmt.Fprintln(os.Stderr, errStyle.Render("Teacher model error: "+err.Error()))
 		os.Exit(1)
 	}
 
@@ -37,60 +61,37 @@ func main() {
 		fantasy.WithSystemPrompt("You are a transcription assistant. Output exactly what is said in the audio, word for word. Do not add commentary, interpretation, or formatting. Only output the raw transcribed text."),
 	)
 
-	persona := selectPersona()
+	// Initial persona selection
+	persona := runPersonaSelect()
 	teacher := fantasy.NewAgent(teacherModel,
 		fantasy.WithSystemPrompt(persona.SystemPrompt),
 	)
 
 	conv := NewConversation()
 
-	fmt.Println("=== English Practice Session ===")
-	fmt.Println("Commands: /style = switch persona, /quit = exit, Enter after recording to accept/re-record")
+	fmt.Println()
+	fmt.Println(bannerStyle.Render("English Practice Session"))
+	fmt.Println(infoStyle.Render(fmt.Sprintf("Teacher: %s", persona.Name)))
+	fmt.Println(infoStyle.Render("/style = switch persona · q = quit"))
 	fmt.Println()
 
 	for {
-		// Record and transcribe with redo loop
-		var transcribed string
-		retries := 0
-		for {
-			rec, cancelled, err := recordFromMic()
-			if err != nil {
-				retries++
-				fmt.Fprintf(os.Stderr, "Recording error (%d/%d): %v\n", retries, maxRecordRetries, err)
-				if retries >= maxRecordRetries {
-					fmt.Fprintln(os.Stderr, "Too many recording failures, skipping turn.")
-					break
-				}
-				continue
-			}
-			if cancelled {
-				fmt.Println("Recording cancelled.")
-				continue
-			}
-			retries = 0
-
-			fmt.Print("Transcribing...")
-			result, err := transcriber.Generate(ctx, fantasy.AgentCall{
-				Prompt: "Transcribe this audio verbatim.",
-				Files: []fantasy.FilePart{
-					{MediaType: "audio/wav", Data: rec.WAVData},
-				},
-			})
-			if err != nil {
-				fmt.Fprintln(os.Stderr, "\nTranscription error:", err)
-				continue
-			}
-
-			transcribed = strings.TrimSpace(result.Response.Content.Text())
-			fmt.Printf("\rYou said: %s\n", transcribed)
-			fmt.Print("Send? (Enter = yes, r = re-record): ")
-			confirm, _ := stdin.ReadString('\n')
-			if strings.ToLower(strings.TrimSpace(confirm)) != "r" {
-				break
-			}
-			fmt.Println()
+		// Run recording + transcription TUI
+		recordModel := NewRecordModel(transcriber, ctx)
+		m, err := tea.NewProgram(recordModel).Run()
+		if err != nil {
+			fmt.Fprintln(os.Stderr, errStyle.Render("TUI error: "+err.Error()))
+			os.Exit(1)
 		}
 
+		result := m.(RecordModel)
+		text, ok := result.Result()
+		if !ok {
+			fmt.Println("Goodbye!")
+			return
+		}
+
+		transcribed := strings.TrimSpace(text)
 		if transcribed == "" {
 			continue
 		}
@@ -101,28 +102,36 @@ func main() {
 			return
 		}
 		if strings.HasPrefix(strings.ToLower(transcribed), "/style") {
-			persona = selectPersona()
+			persona = runPersonaSelect()
 			teacher = fantasy.NewAgent(teacherModel,
 				fantasy.WithSystemPrompt(persona.SystemPrompt),
 			)
 			conv.Clear()
+			fmt.Println()
+			fmt.Println(infoStyle.Render(fmt.Sprintf("Switched to: %s", persona.Name)))
+			fmt.Println()
 			continue
 		}
 
+		// Print user message
+		fmt.Println(youStyle.Render("You: ") + transcribed)
+
 		conv.AddUser(transcribed)
 
-		// Build teacher prompt with conversation history
-		fmt.Print("Thinking...")
+		// Generate teacher response
+		fmt.Println(infoStyle.Render("  Thinking..."))
 		teacherResult, err := teacher.Generate(ctx, fantasy.AgentCall{
 			Messages: conv.FantasyMessages(),
 		})
 		if err != nil {
-			fmt.Fprintln(os.Stderr, "\nTeacher error:", err)
+			fmt.Fprintln(os.Stderr, errStyle.Render("  Teacher error: "+err.Error()))
 			continue
 		}
 
 		response := strings.TrimSpace(teacherResult.Response.Content.Text())
-		fmt.Printf("\rTeacher: %s\n\n", response)
+		fmt.Println(teacherStyle.Render("Teacher:"))
+		fmt.Println(teacherBodyStyle.Render(response))
+		fmt.Println()
 
 		conv.AddAssistant(response)
 	}
