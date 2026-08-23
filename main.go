@@ -51,7 +51,7 @@ func main() {
 		os.Exit(1)
 	}
 
-	teacherModel, err := provider.LanguageModel(ctx, "xiaomi/mimo-v2-flash")
+	teacherModel, err := provider.LanguageModel(ctx, "xiaomi/mimo-v2.5")
 	if err != nil {
 		fmt.Fprintln(os.Stderr, errStyle.Render("Teacher model error: "+err.Error()))
 		os.Exit(1)

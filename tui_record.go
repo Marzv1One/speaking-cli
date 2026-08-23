@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"strings"
 
 	"charm.land/fantasy"
 	"github.com/charmbracelet/bubbles/spinner"
@@ -47,6 +48,7 @@ type RecordModel struct {
 	state       recordState
 	audio       []byte
 	transcribed string
+	segments    []string
 	spinner     spinner.Model
 	transcriber fantasy.Agent
 	ctx         context.Context
@@ -69,7 +71,8 @@ func NewRecordModel(transcriber fantasy.Agent, ctx context.Context) RecordModel 
 
 func (m RecordModel) Result() (string, bool) {
 	if m.state == recordReview {
-		return m.transcribed, true
+		parts := append(m.segments, m.transcribed)
+		return strings.Join(parts, " "), true
 	}
 	return "", false
 }
@@ -169,6 +172,12 @@ func (m RecordModel) handleReviewKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.audio = nil
 		m.transcribed = ""
 		return m, nil
+	case "a":
+		m.segments = append(m.segments, m.transcribed)
+		m.state = recordIdle
+		m.audio = nil
+		m.transcribed = ""
+		return m, nil
 	}
 	return m, nil
 }
@@ -213,9 +222,14 @@ func (m RecordModel) View() string {
 
 	case recordReview:
 		textStyle := recordTextStyle.Width(m.width)
+		var b strings.Builder
+		for _, seg := range m.segments {
+			b.WriteString(textStyle.Render(seg) + "\n")
+		}
+		b.WriteString(textStyle.Render(m.transcribed))
 		return recordStatusStyle.Render("● You said:") + "\n" +
-			textStyle.Render(m.transcribed) + "\n" +
-			recordHelpStyle.Render("enter send · r re-record · q quit")
+			b.String() + "\n" +
+			recordHelpStyle.Render("enter send · a add more · r re-record · q quit")
 
 	default:
 		return ""
