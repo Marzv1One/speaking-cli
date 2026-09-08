@@ -45,13 +45,13 @@ func main() {
 
 	ctx := context.Background()
 
-	transcriptionModel, err := provider.LanguageModel(ctx, "xiaomi/mimo-v2.5")
+	transcriptionModel, err := provider.LanguageModel(ctx, "mistralai/voxtral-small-24b-2507")
 	if err != nil {
 		fmt.Fprintln(os.Stderr, errStyle.Render("Transcription model error: "+err.Error()))
 		os.Exit(1)
 	}
 
-	teacherModel, err := provider.LanguageModel(ctx, "xiaomi/mimo-v2.5")
+	teacherModel, err := provider.LanguageModel(ctx, "openai/gpt-oss-120b")
 	if err != nil {
 		fmt.Fprintln(os.Stderr, errStyle.Render("Teacher model error: "+err.Error()))
 		os.Exit(1)

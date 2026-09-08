@@ -6,6 +6,7 @@ import (
 
 	"charm.land/fantasy"
 	"github.com/charmbracelet/bubbles/spinner"
+	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 )
@@ -17,6 +18,7 @@ const (
 	recordActive
 	recordTranscribing
 	recordReview
+	recordEditing
 )
 
 var (
@@ -49,6 +51,7 @@ type RecordModel struct {
 	audio       []byte
 	transcribed string
 	segments    []string
+	editor      textinput.Model
 	spinner     spinner.Model
 	transcriber fantasy.Agent
 	ctx         context.Context
@@ -60,8 +63,13 @@ func NewRecordModel(transcriber fantasy.Agent, ctx context.Context) RecordModel 
 	sp := spinner.New()
 	sp.Spinner = spinner.Dot
 	sp.Style = lipgloss.NewStyle().Foreground(lipgloss.Color("212"))
+	editor := textinput.New()
+	editor.Prompt = ""
+	editor.TextStyle = recordTextStyle
+	editor.Placeholder = "type a correction"
 	return RecordModel{
 		state:       recordIdle,
+		editor:      editor,
 		spinner:     sp,
 		transcriber: transcriber,
 		ctx:         ctx,
@@ -93,10 +101,13 @@ func (m RecordModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m.handleTranscribingKeys(msg)
 		case recordReview:
 			return m.handleReviewKeys(msg)
+		case recordEditing:
+			return m.handleEditingKeys(msg)
 		}
 
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
+		m.editor.Width = msg.Width - 2
 
 	case recordDoneMsg:
 		m.audio = msg.data
@@ -172,6 +183,11 @@ func (m RecordModel) handleReviewKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.audio = nil
 		m.transcribed = ""
 		return m, nil
+	case "e":
+		m.editor.SetValue(strings.ReplaceAll(m.transcribed, "\n", " "))
+		m.editor.Width = m.width - 2
+		m.state = recordEditing
+		return m, m.editor.Focus()
 	case "a":
 		m.segments = append(m.segments, m.transcribed)
 		m.state = recordIdle
@@ -180,6 +196,25 @@ func (m RecordModel) handleReviewKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	return m, nil
+}
+
+func (m RecordModel) handleEditingKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.String() {
+	case "ctrl+c":
+		return m, tea.Quit
+	case "esc":
+		m.editor.Blur()
+		m.state = recordReview
+		return m, nil
+	case "enter":
+		m.editor.Blur()
+		m.transcribed = strings.TrimSpace(m.editor.Value())
+		m.state = recordReview
+		return m, nil
+	}
+	var cmd tea.Cmd
+	m.editor, cmd = m.editor.Update(msg)
+	return m, cmd
 }
 
 func (m RecordModel) startRecording() tea.Cmd {
@@ -229,7 +264,17 @@ func (m RecordModel) View() string {
 		b.WriteString(textStyle.Render(m.transcribed))
 		return recordStatusStyle.Render("● You said:") + "\n" +
 			b.String() + "\n" +
-			recordHelpStyle.Render("enter send · a add more · r re-record · q quit")
+			recordHelpStyle.Render("enter send · a add more · e edit · r re-record · q quit")
+
+	case recordEditing:
+		var b strings.Builder
+		for _, seg := range m.segments {
+			b.WriteString(recordTextStyle.Width(m.width).Render(seg) + "\n")
+		}
+		return recordStatusStyle.Render("✎ Editing") + "\n" +
+			b.String() +
+			m.editor.View() + "\n" +
+			recordHelpStyle.Render("enter save · esc cancel")
 
 	default:
 		return ""
